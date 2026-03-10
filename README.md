@@ -33,7 +33,7 @@ z_0 = ε - û                 (one-step denoising, inference)
 ## Installation
 
 ```bash
-pip install torch torchaudio transformers x-transformers f5-tts
+pip install torch torchaudio transformers x-transformers
 ```
 
 ---
