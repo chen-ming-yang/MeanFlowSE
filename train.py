@@ -113,10 +113,9 @@ class DNSDataset(Dataset):
     """
     DNS Challenge dataset loader.
 
-    Clean files are discovered recursively under `dns_root`.  Two layouts are
-    transparently supported:
+    Clean files are discovered recursively under `datasets.clean.*` subdirectories
+    of `dns_root`:
 
-        dns_root/clean/**/*.wav                         (flat layout)
         dns_root/datasets.clean.<name>/**/*.wav         (multi-corpus layout)
 
     Noise files are loaded separately from `noise_dir/**/*.wav`.
@@ -151,11 +150,10 @@ class DNSDataset(Dataset):
         self.augment = augment
         self.aug = AudioAugment(sample_rate, rir_dir=rir_dir)
 
-        # Discover clean files: works for both flat (clean/) and
-        # multi-corpus (datasets.clean.*/) layouts.
-        self.clean_files = sorted(self.dns_root.glob("**/*.wav"))
+        # Discover clean files from datasets.clean.*/ subdirectories only.
+        self.clean_files = sorted(self.dns_root.glob("datasets.clean.*/**/*.wav"))
         assert len(self.clean_files) > 0, (
-            f"No .wav files found recursively under {self.dns_root}"
+            f"No .wav files found under {self.dns_root}/datasets.clean.*/"
         )
 
         # Noise files live in a dedicated directory
