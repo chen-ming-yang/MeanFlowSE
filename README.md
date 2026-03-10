@@ -33,7 +33,7 @@ z_0 = ε - û                 (one-step denoising, inference)
 ## Installation
 
 ```bash
-pip install torch torchaudio transformers x-transformers
+pip install torch torchaudio transformers x-transformers lirosa rjieba pypinyin
 ```
 
 ---
@@ -120,6 +120,14 @@ python train.py \
   --noise_dir /data/dns/noise \
   --rir_dir   /data/rirs \
   --fp16
+
+python train.py \
+  --data_root home/cmy/cmy/DNS-Challenge/datasets/dns \
+  --noise_dir home/cmy/cmy/DNS-Challenge/datasets/dns/datasets.noise \
+  --rir_dir   home/cmy/cmy/AEC-Challenge/datasets/RIRs \
+  --epochs 100 \
+  --fp16
+
 ```
 
 ### Resume from checkpoint
