@@ -18,6 +18,8 @@ import math
 import random
 from pathlib import Path
 
+from tqdm import tqdm
+
 import torch
 import torch.nn.functional as F
 import torchaudio
@@ -98,9 +100,9 @@ class AudioAugment:
     def __call__(self, noisy: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
             noisy = self._random_gain(noisy)
-        if random.random() < 0.3:
+        if random.random() < 0.15:
             noisy = self._random_speed(noisy)
-        if random.random() < 0.3:
+        if random.random() < 0.15:
             noisy = self._random_reverb(noisy)
         return noisy
 
@@ -151,16 +153,29 @@ class DNSDataset(Dataset):
         self.aug = AudioAugment(sample_rate, rir_dir=rir_dir)
 
         # Discover clean files from datasets.clean.*/ subdirectories only.
+        if not self.dns_root.is_dir():
+            raise FileNotFoundError(
+                f"dns_root does not exist: {self.dns_root.resolve()}\n"
+                "  Did you forget a leading '/' in the path?"
+            )
+        clean_subdirs = sorted(self.dns_root.glob("datasets.clean.*"))
         self.clean_files = sorted(self.dns_root.glob("datasets.clean.*/**/*.wav"))
+        # Also include wav files directly inside datasets.clean.*/ (no subdirs)
+        for d in clean_subdirs:
+            self.clean_files = sorted(
+                set(self.clean_files) | set(d.glob("*.wav"))
+            )
+        self.clean_files = sorted(self.clean_files)
         assert len(self.clean_files) > 0, (
-            f"No .wav files found under {self.dns_root}/datasets.clean.*/"
+            f"No .wav files found under {self.dns_root.resolve()}/datasets.clean.*/\n"
+            f"  Found subdirs: {[d.name for d in clean_subdirs] or 'none'}"
         )
-
-        # Noise files live in a dedicated directory
+        print(f"DNSDataset: loaded {len(self.clean_files)} clean files from {self.dns_root}/datasets.clean.*/")
         self.noise_files = sorted(self.noise_dir.glob("**/*.wav"))
         assert len(self.noise_files) > 0, (
             f"No .wav files found recursively under {self.noise_dir}"
         )
+        print(f"DNSDataset: loaded {len(self.noise_files)} noise files from {self.noise_dir}/")
 
         if not mix_on_the_fly:
             self.noisy_files = sorted((self.dns_root / "noisy").glob("**/*.wav"))
@@ -201,6 +216,13 @@ class DNSDataset(Dataset):
     # ------------------------------------------------------------------
 
     def __getitem__(self, idx: int):
+        try:
+            return self._getitem_inner(idx)
+        except Exception:
+            # Skip corrupted/unreadable file; return a neighbouring sample
+            return self._getitem_inner((idx + 1) % len(self.clean_files))
+
+    def _getitem_inner(self, idx: int):
         clean = self._load_mono(self.clean_files[idx])
         clean = self._random_crop(clean)
 
@@ -243,6 +265,7 @@ def build_model(cfg: argparse.Namespace) -> MeanFlowSE:
         dim_head=cfg.dim_head,
         ff_mult=cfg.ff_mult,
         dropout=cfg.dropout,
+        attn_backend=cfg.attn_backend,
     )
     return MeanFlowSE(
         ssl_encoder=ssl_encoder,
@@ -265,6 +288,14 @@ def train(cfg: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # ---- CUDA performance knobs ----
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True      # TF32 matmul (~2x for non-fp16 ops)
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True              # auto-tune conv kernels
+        torch.set_float32_matmul_precision("high")
+        print("Enabled: TF32 matmul, cuDNN benchmark")
+
     # Dataset & loader
     dataset = DNSDataset(
         dns_root=cfg.data_root,
@@ -284,10 +315,18 @@ def train(cfg: argparse.Namespace) -> None:
         num_workers=cfg.num_workers,
         pin_memory=True,
         drop_last=True,
+        persistent_workers=cfg.num_workers > 0,
+        prefetch_factor=8 if cfg.num_workers > 0 else None,
     )
 
     # Model
     model = build_model(cfg).to(device)
+
+    # Compile models for faster execution (PyTorch 2.x)
+    if cfg.compile:
+        print("Compiling SSL encoder + DiT backbone with torch.compile ...")
+        model.ssl_encoder.ssl_model = torch.compile(model.ssl_encoder.ssl_model, mode="reduce-overhead")
+        model.dit_backbone = torch.compile(model.dit_backbone)
 
     # Only train the backbone + SSL layer weights; VAE is frozen inside MeanFlowSE
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -310,21 +349,23 @@ def train(cfg: argparse.Namespace) -> None:
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # Mixed precision scaler
-    scaler = torch.cuda.amp.GradScaler(enabled=cfg.fp16)
+    scaler = torch.amp.GradScaler("cuda", enabled=cfg.fp16)
 
     global_step = start_epoch * len(loader)
 
-    for epoch in range(start_epoch, cfg.epochs):
+    epoch_bar = tqdm(range(start_epoch, cfg.epochs), desc="Epochs", unit="epoch")
+    for epoch in epoch_bar:
         model.train()
         epoch_loss = 0.0
 
-        for step, (noisy, clean) in enumerate(loader):
+        step_bar = tqdm(loader, desc=f"Epoch {epoch:03d}", unit="batch", leave=False)
+        for step, (noisy, clean) in enumerate(step_bar):
             noisy = noisy.to(device, non_blocking=True)
             clean = clean.to(device, non_blocking=True)
 
             optimizer.zero_grad()
 
-            with torch.cuda.amp.autocast(enabled=cfg.fp16):
+            with torch.amp.autocast("cuda", enabled=cfg.fp16):
                 loss, stats = model.forward_train(noisy, clean)
 
             scaler.scale(loss).backward()
@@ -340,16 +381,17 @@ def train(cfg: argparse.Namespace) -> None:
             epoch_loss += loss.item()
             global_step += 1
 
-            if step % cfg.log_every == 0:
-                lr_now = scheduler.get_last_lr()[0]
-                print(
-                    f"Epoch {epoch:03d} | step {step:05d}/{len(loader)} | "
-                    f"loss {stats['loss']:.4f} | delta_sq {stats['delta_sq']:.4f} | "
-                    f"w {stats['mean_weight']:.4f} | lr {lr_now:.2e}"
-                )
+            lr_now = scheduler.get_last_lr()[0]
+            step_bar.set_postfix(
+                loss=f"{stats['loss']:.4f}",
+                delta_sq=f"{stats['delta_sq']:.4f}",
+                w=f"{stats['mean_weight']:.4f}",
+                lr=f"{lr_now:.2e}",
+            )
 
         avg_loss = epoch_loss / len(loader)
-        print(f"=== Epoch {epoch:03d} avg loss: {avg_loss:.4f} ===")
+        epoch_bar.set_postfix(avg_loss=f"{avg_loss:.4f}")
+        tqdm.write(f"=== Epoch {epoch:03d} avg loss: {avg_loss:.4f} ===")
 
         # Save checkpoint every N epochs and at the last epoch
         if (epoch + 1) % cfg.save_every == 0 or epoch == cfg.epochs - 1:
@@ -364,7 +406,7 @@ def train(cfg: argparse.Namespace) -> None:
                 },
                 ckpt_path,
             )
-            print(f"Saved checkpoint → {ckpt_path}")
+            tqdm.write(f"Saved checkpoint → {ckpt_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +436,7 @@ def get_parser() -> argparse.ArgumentParser:
     # Model
     p.add_argument("--ssl_model", type=str, default=cfg.model.ssl_model)
     p.add_argument("--ssl_layers", type=int, default=cfg.model.ssl_layers)
-    p.add_argument("--ssl_dim", type=int, default=cfg.model.ssl_dim, help="WavLM-large hidden size")
+    p.add_argument("--ssl_dim", type=int, default=cfg.model.ssl_dim, help="WavLM hidden size (768 for base-plus, 1024 for large)")
     p.add_argument("--latent_dim", type=int, default=cfg.model.latent_dim)
     p.add_argument("--hidden_dim", type=int, default=cfg.model.hidden_dim)
     p.add_argument("--depth", type=int, default=cfg.model.depth)
@@ -402,6 +444,9 @@ def get_parser() -> argparse.ArgumentParser:
     p.add_argument("--dim_head", type=int, default=cfg.model.dim_head)
     p.add_argument("--ff_mult", type=int, default=cfg.model.ff_mult)
     p.add_argument("--dropout", type=float, default=cfg.model.dropout)
+    p.add_argument("--attn_backend", type=str, default="torch",
+                   choices=["flash_attn", "torch"],
+                   help="Attention backend: 'flash_attn' (recommended) or 'torch'")
 
     # Mean-Flow hyperparams
     p.add_argument("--flow_ratio", type=float, default=cfg.mean_flow.flow_ratio)
@@ -414,6 +459,8 @@ def get_parser() -> argparse.ArgumentParser:
     p.add_argument("--epochs", type=int, default=cfg.train.epochs)
     p.add_argument("--batch_size", type=int, default=cfg.train.batch_size)
     p.add_argument("--num_workers", type=int, default=cfg.train.num_workers)
+    p.add_argument("--compile", action="store_true", default=False,
+                   help="torch.compile the DiT backbone for faster training (PyTorch 2.x)")
     p.add_argument("--lr", type=float, default=cfg.train.lr)
     p.add_argument("--lr_min", type=float, default=cfg.train.lr_min)
     p.add_argument("--weight_decay", type=float, default=cfg.train.weight_decay)

@@ -29,9 +29,9 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     # SSL encoder (WavLM)
-    ssl_model: str = "microsoft/wavlm-large"
-    ssl_layers: int = 25
-    ssl_dim: int = 1024            # WavLM-large hidden size
+    ssl_model: str = "microsoft/wavlm-base-plus"
+    ssl_layers: int = 13
+    ssl_dim: int = 768             # WavLM-base-plus hidden size
 
     # VAE
     latent_dim: int = 512
@@ -59,7 +59,7 @@ class MeanFlowConfig:
 class TrainConfig:
     epochs: int = 100
     batch_size: int = 16
-    num_workers: int = 4
+    num_workers: int = 16
     lr: float = 1e-4
     lr_min: float = 1e-6
     weight_decay: float = 1e-2

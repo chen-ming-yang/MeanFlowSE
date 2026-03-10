@@ -121,12 +121,10 @@ python train.py \
   --rir_dir   /data/rirs \
   --fp16
 
-python train.py \
-  --data_root home/cmy/cmy/DNS-Challenge/datasets/dns \
-  --noise_dir home/cmy/cmy/DNS-Challenge/datasets/dns/datasets.noise \
-  --rir_dir   home/cmy/cmy/AEC-Challenge/datasets/RIRs \
-  --epochs 100 \
-  --fp16
+python train.py   --data_root /home/cmy/cmy/DNS-Challenge/datasets/dns/   \
+  --noise_dir /home/cmy/cmy/DNS-Challenge/datasets/dns/datasets.noise  \
+  --rir_dir   /home/cmy/cmy/AEC-Challenge/datasets/RIRs \
+  --epochs 100   --fp16
 
 ```
 

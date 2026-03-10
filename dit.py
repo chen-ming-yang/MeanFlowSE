@@ -356,7 +356,7 @@ class DiTBackbone(nn.Module):
 
     Args:
         latent_dim: VAE latent feature dimension (matches VAEEncoder.latent_dim).
-        ssl_dim:    SSL encoder output dimension (1024 for WavLM-large).
+        ssl_dim:    SSL encoder output dimension (768 for WavLM-base-plus).
         hidden_dim: Transformer hidden dimension.
         depth:      Number of DiTBlock layers.
         heads:      Number of attention heads.
@@ -368,13 +368,14 @@ class DiTBackbone(nn.Module):
     def __init__(
         self,
         latent_dim: int = 512,
-        ssl_dim: int = 1024,
+        ssl_dim: int = 768,
         hidden_dim: int = 512,
         depth: int = 8,
         heads: int = 8,
         dim_head: int = 64,
         ff_mult: int = 4,
         dropout: float = 0.1,
+        attn_backend: str = "flash_attn",  # "flash_attn" or "torch"
     ):
         super().__init__()
 
@@ -398,6 +399,8 @@ class DiTBackbone(nn.Module):
                     dim_head=dim_head,
                     ff_mult=ff_mult,
                     dropout=dropout,
+                    attn_backend=attn_backend,
+                    attn_mask_enabled=False,
                 )
                 for _ in range(depth)
             ]
