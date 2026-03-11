@@ -16,7 +16,7 @@ class DataConfig:
     # Separate noise directory
     noise_dir: str = "/data/dns/noise"
     sample_rate: int = 16000
-    clip_len: float = 4.0          # seconds per training clip
+    clip_len: float = 10.0          # seconds per training clip
     mix_on_the_fly: bool = True    # mix clean+noise at runtime
     snr_low: float = -5.0          # dB
     snr_high: float = 20.0         # dB
@@ -58,7 +58,8 @@ class MeanFlowConfig:
 @dataclass
 class TrainConfig:
     epochs: int = 100
-    batch_size: int = 16
+    max_tokens: int = 960_000       # total audio samples per batch (~60s @ 16kHz)
+    max_batch_size: int = 64         # hard upper-bound on utterances per batch
     num_workers: int = 16
     lr: float = 1e-4
     lr_min: float = 1e-6
@@ -67,7 +68,7 @@ class TrainConfig:
     fp16: bool = False
     save_dir: str = "checkpoints"
     save_every: int = 5            # save checkpoint every N epochs
-    log_every: int = 50            # print log every N steps
+    log_every: int = 1            # print log every N steps
     resume: str = None             # path to checkpoint to resume from
 
 

@@ -88,8 +88,7 @@ class MeanFlowSE(nn.Module):
         self.adaptive_c = adaptive_c
 
         for name, param in self.ssl_encoder.named_parameters():
-            if "layer_weights" not in name:
-                param.requires_grad = False
+            param.requires_grad = False
             
         #Freeze the vae encoder and decoder
         for param in self.vae_encoder.parameters():

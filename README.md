@@ -121,10 +121,18 @@ python train.py \
   --rir_dir   /data/rirs \
   --fp16
 
-python train.py   --data_root /home/cmy/cmy/DNS-Challenge/datasets/dns/   \
-  --noise_dir /home/cmy/cmy/DNS-Challenge/datasets/dns/datasets.noise  \
+HF_ENDPOINT=https://hf-mirror.com
+
+```
+after downloading ssl model
+```
+HF_HUB_OFFLINE=1 python train.py \
+  --data_root /home/cmy/cmy/DNS-Challenge/datasets/dns_16k/ \
+  --noise_dir /home/cmy/cmy/DNS-Challenge/datasets/dns_16k/datasets.noise \
   --rir_dir   /home/cmy/cmy/AEC-Challenge/datasets/RIRs \
-  --epochs 100   --fp16
+  --epochs 100 --fp16
+
+sudo nvidia-smi -pl 450
 
 ```
 
@@ -251,3 +259,6 @@ meanFlow/
   ├── inference.py     # inference CLI: single file, batch directory, chunked long files
   └── README.md
 ```
+
+
+source .venv/bin/activate

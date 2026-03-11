@@ -16,6 +16,7 @@ from pathlib import Path
 
 import torch
 import torchaudio
+import soundfile as sf
 
 from config import default_config
 from mean_flow import MeanFlowSE, SSLEncoder, VAEEncoder, VAEDecoder
@@ -66,10 +67,12 @@ def load_model(ckpt_path: str, device: torch.device) -> tuple[MeanFlowSE, dict]:
 
 def load_wav(path: Path, target_sr: int, device: torch.device) -> torch.Tensor:
     """Load wav, convert to mono, resample → (1, samples)."""
-    wav, sr = torchaudio.load(str(path))
+    wav_data, sr = sf.read(str(path), always_2d=True)  # (samples, channels)
+    wav = torch.from_numpy(wav_data.T).float()  # (channels, samples)
     if wav.shape[0] > 1:
         wav = wav.mean(dim=0, keepdim=True)
     if sr != target_sr:
+        print (f"Resampling {path} from {sr} Hz to {target_sr} Hz")
         wav = torchaudio.functional.resample(wav, sr, target_sr)
     return wav.to(device)  # (1, T)
 
@@ -79,7 +82,7 @@ def save_wav(wav: torch.Tensor, path: Path, sample_rate: int) -> None:
     # wav: (1, T) or (T,)
     if wav.ndim == 1:
         wav = wav.unsqueeze(0)
-    torchaudio.save(str(path), wav.cpu(), sample_rate)
+    sf.write(str(path), wav.cpu().numpy().T, sample_rate)
 
 
 # ---------------------------------------------------------------------------
