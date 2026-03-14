@@ -1,5 +1,5 @@
 # MeanFlowSE
-
+https://arxiv.org/pdf/2509.23299  
 Speech enhancement using **Mean Flow** — a single-step flow matching model that predicts the average velocity field from noisy to clean speech in the latent space of a frozen VAE.
 
 ## Architecture

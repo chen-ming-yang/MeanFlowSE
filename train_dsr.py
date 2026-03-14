@@ -22,7 +22,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import soundfile as sf
 
-from dsr_mean_flow import (
+from meandsr.dsr_mean_flow import (
     OneToManyDysarthriaSE,
     DirectMappingDiTBackbone,
     PerceiverBottleneck,
