@@ -119,9 +119,19 @@ class MeanFlowSE(nn.Module):
         # self.time_sigma = 1
         return z_x - epsilon
     
-    def _adaptive_l2_loss(self, u_hat, u_target):
+    def _adaptive_l2_loss(self, u_hat, u_target, mask=None):
         # w = (delta^2 + c)^{-(1-gamma)}, L = E[w * delta^2]
-        delta_sq = (u_hat - u_target).pow(2).mean(dim=(-2, -1))
+        # mask: (B, T) boolean mask where True = valid position
+        delta_sq_full = (u_hat - u_target).pow(2).sum(dim=-1)  # (B, T)
+        
+        if mask is not None:
+            # Apply mask: only compute loss over valid (non-padded) positions
+            delta_sq_full = delta_sq_full * mask  # zero out padded positions
+            valid_counts = mask.sum(dim=1).clamp(min=1)  # per-sample valid token count
+            delta_sq = delta_sq_full.sum(dim=1) / valid_counts  # mean over valid positions
+        else:
+            delta_sq = delta_sq_full.mean(dim=1)  # mean over all positions
+        
         w = (delta_sq.detach() + self.adaptive_c) ** (-(1 - self.adaptive_gamma))
         loss = (w * delta_sq).mean()
         return loss, {
@@ -130,7 +140,7 @@ class MeanFlowSE(nn.Module):
             "mean_weight": w.mean().item(),
         }
     
-    def forward_train(self, noisy_wav, clean_wav):
+    def forward_train(self, noisy_wav, clean_wav, lengths=None):
         B = noisy_wav.shape[0]
         device = noisy_wav.device
 
@@ -151,7 +161,16 @@ class MeanFlowSE(nn.Module):
 
         u_target = self._target_average_velocity(z_x, epsilon)
 
-        return self._adaptive_l2_loss(u_hat, u_target)
+        # Create latent-space mask from waveform lengths
+        # VAE encoder downsamples by 16x (4 stride-2 convs)
+        mask = None
+        if lengths is not None:
+            latent_lengths = (lengths / 16).long()  # downsample factor matches VAE encoder
+            T = z_x.shape[1]
+            mask = torch.arange(T, device=device).unsqueeze(0) < latent_lengths.unsqueeze(1)  # (B, T)
+            mask = mask.float()  # convert to float for multiplication
+
+        return self._adaptive_l2_loss(u_hat, u_target, mask=mask)
     
     @torch.no_grad()
     def inference(self, noisy_waveform):

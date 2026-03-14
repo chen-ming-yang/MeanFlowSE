@@ -378,13 +378,14 @@ class DynamicBatchSampler(Sampler):
 
 
 def dynamic_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]]):
-    """Collate variable-length (noisy, clean) pairs → padded batch tensors."""
+    """Collate variable-length (noisy, clean) pairs → padded batch tensors + lengths."""
     noisys, cleans = zip(*batch)
+    lengths = torch.tensor([x.shape[-1] for x in cleans], dtype=torch.long)
     max_len = max(x.shape[-1] for x in cleans)
     # Pad all to the longest sample in this batch
     noisy_batch = torch.stack([F.pad(x, (0, max_len - x.shape[-1])) for x in noisys])
     clean_batch = torch.stack([F.pad(x, (0, max_len - x.shape[-1])) for x in cleans])
-    return noisy_batch, clean_batch
+    return noisy_batch, clean_batch, lengths
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +538,7 @@ def train(cfg: argparse.Namespace) -> None:
         # data_start = time.perf_counter()
 
         step_bar = tqdm(loader, desc=f"Epoch {epoch:03d}", unit="batch", leave=False)
-        for step, (noisy, clean) in enumerate(step_bar):
+        for step, (noisy, clean, lengths) in enumerate(step_bar):
             # ---- data loading time ----
             # data_elapsed measures the time between the end of the previous GPU step
             # and the moment this batch is ready in Python (i.e. the DataLoader's
@@ -555,11 +556,12 @@ def train(cfg: argparse.Namespace) -> None:
 
             noisy = noisy.to(device, non_blocking=True)
             clean = clean.to(device, non_blocking=True)
+            lengths = lengths.to(device, non_blocking=True)
 
             optimizer.zero_grad()
 
             with torch.amp.autocast("cuda", enabled=cfg.fp16):
-                loss, stats = model.forward_train(noisy, clean)
+                loss, stats = model.forward_train(noisy, clean, lengths=lengths)
 
             scaler.scale(loss).backward()
 
