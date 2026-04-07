@@ -17,13 +17,17 @@ class DataConfig:
     noise_dir: str = "/data/dns/noise"
     sample_rate: int = 16000
     clip_len: float = 10.0          # seconds per training clip
-    mix_on_the_fly: bool = True    # mix clean+noise at runtime
+    mix_on_the_fly: bool = False    # mix clean+noise at runtime
     snr_low: float = -5.0          # dB
     snr_high: float = 20.0         # dB
     augment: bool = True           # waveform-level augmentation on noisy signal
     # Optional directory of RIR .wav files for real room impulse response augmentation.
     # If None, only synthetic exponential IRs are used.
     rir_dir: str = None
+    # Dataset layout:
+    #   "default"    – original DNS Challenge layout: datasets.clean.*/ + separate noise_dir
+    #   "paired_dir" – flat clean/ + noisy/ under data_root, paired by fileid_N suffix
+    dns_layout: str = "default"
 
 
 @dataclass
@@ -34,14 +38,18 @@ class ModelConfig:
     ssl_dim: int = 768             # WavLM-base-plus hidden size
 
     # VAE
-    latent_dim: int = 512
+    vae_type: str = "codec"        # "default" (placeholder), "wave_vae", or "codec" (EnCodec/DAC)
+    codec_model: str = "dac_16khz" # codec model name (for vae_type="codec")
+    vae_ckpt: str = None           # path to pretrained WaveVAE checkpoint (for vae_type="wave_vae")
+    vae_hop_length: int = 640      # WaveVAE hop length (640→25Hz, 1280→12.5Hz @ 16kHz)
+    latent_dim: int = 1024         # DAC 16kHz latent dim
 
-    # DiT backbone  (paper: N=8, heads=8, hidden=512, FFN=2048)
-    hidden_dim: int = 512
+    # DiT backbone
+    hidden_dim: int = 768
     depth: int = 8
-    heads: int = 8
+    heads: int = 12
     dim_head: int = 64
-    ff_mult: int = 4               # FFN dim = hidden_dim * ff_mult = 2048
+    ff_mult: int = 4               # FFN dim = hidden_dim * ff_mult = 3072
     dropout: float = 0.1
 
 
@@ -57,18 +65,23 @@ class MeanFlowConfig:
 
 @dataclass
 class TrainConfig:
-    epochs: int = 100
+    epochs: int = 200
+    loader_mode: str = "fixed"      # "dynamic" (max_tokens) or "fixed" (batch_size)
+    batch_size: int = 8                # used when loader_mode == "fixed"
+    fixed_clip_len: float = 2.0        # seconds, used when loader_mode == "fixed"
     max_tokens: int = 960_000       # total audio samples per batch (~60s @ 16kHz)
     max_batch_size: int = 64         # hard upper-bound on utterances per batch
     num_workers: int = 16
+    prefetch_factor: int = 4         # batches prefetched per worker
     lr: float = 1e-4
     lr_min: float = 1e-6
+    lr_gamma: float = 0.99           # exponential decay factor per epoch
     weight_decay: float = 1e-2
     grad_clip: float = 1.0
-    fp16: bool = False
+    fp16: bool = True
     save_dir: str = "checkpoints"
-    save_every: int = 5            # save checkpoint every N epochs
-    log_every: int = 1            # print log every N steps
+    save_every: int = 1            # save checkpoint every N epochs
+    log_every: int = 10            # print log every N steps
     resume: str = None             # path to checkpoint to resume from
 
 

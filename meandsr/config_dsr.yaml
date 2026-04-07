@@ -1,0 +1,57 @@
+# =============================================================================
+# MeanFlowSE DSR Training Configuration
+# =============================================================================
+
+# --- Data ---
+data:
+  manifest: "tmp_audio_equal_len/aligned_pairs_used.json"
+  project_root: "."
+  sample_rate: 16000
+  clip_len: 6.0          # Max training clip length in seconds
+
+# --- Model: SSL Encoder ---
+ssl:
+  model: "microsoft/wavlm-base-plus"
+  layers: 13
+  dim: 768               # WavLM hidden size
+
+# --- Model: VAE (pretrained audio codec) ---
+vae:
+  codec_model: "dac_16khz"               # "dac_16khz" (native 16kHz) or "facebook/encodec_24khz"
+  latent_dim: 1024                        # auto-detected from codec when codec_model is set
+
+# --- Model: DiT Backbone ---
+dit:
+  hidden_dim: 1024
+  depth: 8
+  heads: 8
+  dim_head: 64
+  ff_mult: 4
+  dropout: 0.1
+  attn_backend: "torch"   # "flash_attn" or "torch"
+
+# --- Mean-Flow Hyperparameters ---
+flow:
+  flow_ratio: 0.25
+  time_mu: -0.4
+  time_sigma: 1.0
+  adaptive_gamma: 0.5
+  adaptive_c: 1.0e-3
+
+# --- Training ---
+training:
+  epochs: 100
+  batch_size: 8
+  num_workers: 4
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
+  fp16: false
+
+# --- Logging / Checkpointing ---
+logging:
+  save_dir: "checkpoints_dsr"
+  save_every: 1
+  log_every: 20
+  resume: null            # Path to checkpoint to resume from

@@ -20,6 +20,107 @@ z_0 = ε - û                 (one-step denoising, inference)
     └──► VAE Decoder ──► enhanced waveform
 ```
 
+### Training Flow (OneToManyDysarthriaSE)
+
+```mermaid
+flowchart TB
+    subgraph INPUTS["📥 Inputs"]
+        DW["dys_wav<br/>(B, samples)"]
+        CW["clean_wav<br/>(B, samples)<br/>equal length"]
+    end
+
+    subgraph FROZEN["🧊 Frozen Encoders"]
+        SSL["SSLEncoder (WavLM)<br/>❄️ frozen"]
+        VAE_ENC["VAEEncoder (Conv1d ×5)<br/>❄️ frozen<br/>downsample 16×"]
+    end
+
+    subgraph TRAINABLE["🔥 Trainable Modules"]
+        PERC["PerceiverBottleneck<br/>(cross-attn × num_layers)<br/>→ (B, K, D)"]
+        DIT["DiT Backbone<br/>(DiTBlockWithCrossAttention × depth)<br/>self-attn + cross-attn to bottleneck"]
+    end
+
+    subgraph FLOW_MATCHING["📐 Flow Matching"]
+        SAMPLE_T["Sample t ~ σ(N(μ,σ²))<br/>r = flow_ratio × t"]
+        NOISE["ε ~ N(0, I)<br/>same shape as z_normal"]
+        INTERP["z_t = (1-t)·ε + t·z_normal"]
+        U_TARGET["u_target = z_normal - ε"]
+    end
+
+    subgraph LOSS["📉 Loss"]
+        PREDICT["û = DiT(z_t, bottleneck, r, t)"]
+        ADAPTIVE["Adaptive L2 Loss<br/>w = (δ² + c)^{-(1-γ)}<br/>loss = mean(w · δ²)"]
+    end
+
+    DW --> SSL
+    SSL -->|"ssl_feats<br/>(B, T_ssl, 768)"| PERC
+    PERC -->|"bottleneck<br/>(B, K, D)"| DIT
+
+    CW --> VAE_ENC
+    VAE_ENC -->|"z_normal<br/>(B, T_latent, latent_dim)"| FLOW_MATCHING
+
+    SAMPLE_T --> INTERP
+    NOISE --> INTERP
+    NOISE --> U_TARGET
+
+    INTERP -->|"z_t"| DIT
+    DIT -->|"û (predicted velocity)"| ADAPTIVE
+    U_TARGET -->|"u_target"| ADAPTIVE
+    ADAPTIVE -->|"backprop"| TRAINABLE
+
+    style FROZEN fill:#e3f2fd,stroke:#1565c0
+    style TRAINABLE fill:#fff3e0,stroke:#e65100
+    style FLOW_MATCHING fill:#f3e5f5,stroke:#6a1b9a
+    style LOSS fill:#fce4ec,stroke:#b71c1c
+    style INPUTS fill:#e8f5e9,stroke:#2e7d32
+```
+
+### Inference Flow (OneToManyDysarthriaSE)
+
+```mermaid
+flowchart TB
+    subgraph INPUT["📥 Input"]
+        DW2["dys_wav<br/>(B, samples)"]
+    end
+
+    subgraph ENCODE["🧊 Encoding (frozen SSL)"]
+        SSL2["SSLEncoder (WavLM)<br/>❄️ frozen"]
+        PERC2["PerceiverBottleneck<br/>→ (B, K, D)"]
+    end
+
+    subgraph LENGTH["📏 Length Prediction"]
+        LP["LengthPredictor<br/>pool(bottleneck) → T_normal"]
+    end
+
+    subgraph GENERATE["🎯 One-Step Generation"]
+        NOISE2["ε ~ N(0, I)<br/>(B, T_normal, latent_dim)"]
+        STEP["Set r=0, t=1<br/>(single full step)"]
+        DIT2["DiT Backbone<br/>û = DiT(ε, bottleneck, r=0, t=1)"]
+        SOLVE["z₀ = ε - û<br/>(ODE solution in 1 step)"]
+    end
+
+    subgraph DECODE["🔊 Decoding"]
+        VAE_DEC["VAEDecoder (ConvTranspose1d ×5)<br/>❄️ frozen<br/>upsample 256×"]
+        OUT["enhanced_wav<br/>(B, samples)"]
+    end
+
+    DW2 --> SSL2
+    SSL2 -->|"ssl_feats"| PERC2
+    PERC2 -->|"bottleneck"| LP
+    PERC2 -->|"bottleneck"| DIT2
+    LP -->|"T_normal"| NOISE2
+    NOISE2 --> DIT2
+    STEP --> DIT2
+    DIT2 -->|"û"| SOLVE
+    SOLVE -->|"z₀"| VAE_DEC
+    VAE_DEC --> OUT
+
+    style INPUT fill:#e8f5e9,stroke:#2e7d32
+    style ENCODE fill:#e3f2fd,stroke:#1565c0
+    style LENGTH fill:#fff9c4,stroke:#f9a825
+    style GENERATE fill:#f3e5f5,stroke:#6a1b9a
+    style DECODE fill:#e0f7fa,stroke:#00695c
+```
+
 | Component | Details |
 |---|---|
 | SSL encoder | WavLM-large (25 layers, learnable weighted sum) |
@@ -128,11 +229,40 @@ after downloading ssl model
 ```
 HF_HUB_OFFLINE=1 python train.py \
   --data_root /home/cmy/cmy/DNS-Challenge/datasets/dns_16k/ \
-  --noise_dir /home/cmy/cmy/DNS-Challenge/datasets/dns_16k/datasets.noise \
+  --noise_dir /home/cmy/cmy/DNS-Challenge/datasets/dns_16k/datasets.noise/ \
   --rir_dir   /home/cmy/cmy/AEC-Challenge/datasets/RIRs \
   --epochs 100 --fp16
 
+
+
+
 sudo nvidia-smi -pl 450
+
+
+So with defaults: a 30s file → capped to 10s → split into 5 × 2s segments.
+use pre generated audio from dns dataset using its own generate python script
+
+HF_HUB_OFFLINE=1 python train.py   --data_root /home/cmy/cmy/DNS-Challenge/da
+tasets/training_set   --dns_layout paired_dir   --loader_mode fixed   --batch_size 8
+
+HF_HUB_OFFLINE=1 python train.py   --data_root /home/cmy/cmy/DNS-Challenge/datasets/training_set   --dns_layout paired_dir   --loader_mode fixed   --batch_size 32
+
+
+
+
+
+HF_HUB_OFFLINE=1 python train_dsr.py \
+  --dys_root /home/cmy/MeanFlowSE/tmp_audio/dysarthria \
+  --normal_root /home/cmy/MeanFlowSE/tmp_audio/normal \
+  --epochs 100 \
+  --batch_size 8 \
+  --fp16
+
+
+HF_HUB_OFFLINE=1 python meandsr/infer_dsr.py   --ckpt /home/cmy/MeanFlowSE/checkpoints_dsr/ckpt_epoch008.pt   --input /home/cmy/MeanFlowSE/tmp_audio/dysarthria/02/S002T001E000N00000.wav   --output ./dsr_out.wav
+
+
+HF_HUB_OFFLINE=1 /home/cmy/MeanFlowSE/.venv/bin/python meandsr/train_dsr.py --batch_size 8 --fp16 --lr 3e-4
 
 ```
 
@@ -179,9 +309,11 @@ python inference.py \
 
 # Directory of files (mirrors directory structure)
 python inference.py \
-  --ckpt checkpoints/ckpt_epoch099.pt \
-  --input noisy_dir/ \
-  --output enhanced_dir/
+  --ckpt /home/cmy/MeanFlowSE/checkpoints/ckpt_epoch004.pt \
+  --input /home/cmy/cmy/DNS-Challenge/datasets/dns/datasets.dev_testset/datasets/dev_testset/ms_realrec_emotional_laptopmicrophone_A3U20M3KJ10B1A_Creakingchair_near_Surprised_fileid_5.wav \
+  --output ./output.wav
+
+
 
 # Long files — process in 10-second chunks
 python inference.py \

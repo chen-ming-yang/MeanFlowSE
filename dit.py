@@ -369,13 +369,13 @@ class DiTBackbone(nn.Module):
         self,
         latent_dim: int = 512,
         ssl_dim: int = 768,
-        hidden_dim: int = 512,
+        hidden_dim: int = 1024,
         depth: int = 8,
         heads: int = 8,
         dim_head: int = 64,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        attn_backend: str = "flash_attn",  # "flash_attn" or "torch"
+        attn_backend: str = "torch",  # "flash_attn" or "torch"
     ):
         super().__init__()
 

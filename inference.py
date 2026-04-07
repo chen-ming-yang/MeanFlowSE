@@ -32,8 +32,29 @@ def load_model(ckpt_path: str, device: torch.device) -> tuple[MeanFlowSE, dict]:
     cfg = ckpt.get("cfg", vars(default_config.to_namespace()))
 
     ssl_encoder = SSLEncoder(model_name=cfg["ssl_model"], num_layers=cfg["ssl_layers"])
-    vae_encoder = VAEEncoder(latent_dim=cfg["latent_dim"])
-    vae_decoder = VAEDecoder(latent_dim=cfg["latent_dim"])
+
+    # VAE encoder/decoder selection
+    vae_type = cfg.get("vae_type", "default")
+    if vae_type == "wave_vae":
+        from wave_vae import build_wave_vae
+        wave_vae = build_wave_vae(
+            latent_dim=cfg["latent_dim"],
+            hop_length=cfg.get("vae_hop_length", 640),
+            pretrained_path=cfg.get("vae_ckpt", None),
+            device=device,
+        )
+        vae_encoder = wave_vae.encoder
+        vae_decoder = wave_vae.decoder
+    elif vae_type == "codec":
+        from codec_vae import build_codec_vae
+        vae_encoder, vae_decoder = build_codec_vae(
+            cfg.get("codec_model", "facebook/encodec_24khz"),
+            sr=cfg.get("sample_rate", 16000),
+        )
+    else:
+        vae_encoder = VAEEncoder(latent_dim=cfg["latent_dim"])
+        vae_decoder = VAEDecoder(latent_dim=cfg["latent_dim"])
+
     backbone = DiTBackbone(
         latent_dim=cfg["latent_dim"],
         ssl_dim=cfg["ssl_dim"],

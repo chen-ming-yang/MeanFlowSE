@@ -162,10 +162,12 @@ class MeanFlowSE(nn.Module):
         u_target = self._target_average_velocity(z_x, epsilon)
 
         # Create latent-space mask from waveform lengths
-        # VAE encoder downsamples by 16x (4 stride-2 convs)
+        # Downsample factor depends on VAE: default=16, WaveVAE=hop_length
         mask = None
         if lengths is not None:
-            latent_lengths = (lengths / 16).long()  # downsample factor matches VAE encoder
+            hop = getattr(self.vae_encoder, 'hop_length',
+                          getattr(self.vae_encoder, '_stride', 16))
+            latent_lengths = (lengths / hop).long()
             T = z_x.shape[1]
             mask = torch.arange(T, device=device).unsqueeze(0) < latent_lengths.unsqueeze(1)  # (B, T)
             mask = mask.float()  # convert to float for multiplication
@@ -173,24 +175,59 @@ class MeanFlowSE(nn.Module):
         return self._adaptive_l2_loss(u_hat, u_target, mask=mask)
     
     @torch.no_grad()
-    def inference(self, noisy_waveform):
+    def inference(self, noisy_waveform, debug=True):
         B = noisy_waveform.shape[0]
+        T_audio = noisy_waveform.shape[1]
         device = noisy_waveform.device
 
-        z_y_ssl = self.ssl_encoder(noisy_waveform)
-        T_latent = z_y_ssl.shape[1]
+        def _stat(name, x):
+            if debug:
+                print(f"[DEBUG] {name}: shape={list(x.shape)}, "
+                      f"min={x.min().item():.4f}, max={x.max().item():.4f}, "
+                      f"mean={x.mean().item():.4f}, std={x.std().item():.4f}")
 
-        epsilon = torch.randn(B, T_latent, self.vae_encoder.latent_dim, device=device)
-        # t = 0 -> 1
+        if debug:
+            print(f"[DEBUG] noisy_waveform: shape={list(noisy_waveform.shape)}, device={device}")
+        _stat("noisy_waveform", noisy_waveform)
+
+        z_y_ssl = self.ssl_encoder(noisy_waveform)
+        _stat("z_y_ssl (SSL features)", z_y_ssl)
+
+        # Encode noisy audio to get VAE shape reference
+        z_ref = self.vae_encoder(noisy_waveform)
+        _stat("z_ref (VAE-encoded noisy, for shape)", z_ref)
+
+        # Align SSL features to VAE temporal resolution
+        T_vae = z_ref.shape[1]
+        z_y = z_y_ssl.transpose(1, 2)
+        z_y = F.interpolate(z_y, size=T_vae, mode='linear', align_corners=False)
+        z_y = z_y.transpose(1, 2)  # (B, T_vae, ssl_dim)
+        _stat("z_y (aligned SSL)", z_y)
+
+        # Sample random noise epsilon with same shape as VAE latent
+        epsilon = torch.randn_like(z_ref)
+        _stat("epsilon (random noise)", epsilon)
+
+        # One-step inference: z0 = epsilon - u(epsilon, 0, 1)
         r = torch.zeros(B, device=device)
         t = torch.ones(B, device=device)
+        if debug:
+            print(f"[DEBUG] r={r.tolist()}, t={t.tolist()}")
+        u_hat = self.dit_backbone(epsilon, z_y, r, t)
+        _stat("u_hat (predicted velocity)", u_hat)
 
-        u_hat = self.dit_backbone(epsilon, z_y_ssl, r, t)
-        
-        # one step infernce
         z0 = epsilon - u_hat
+        _stat("z0 (denoised latent)", z0)
 
-        return self.vae_decoder(z0)
+        wav = self.vae_decoder(z0)
+        _stat("output wav", wav)
+
+        if debug:
+            # Also decode z_ref directly to see if VAE roundtrip works
+            wav_roundtrip = self.vae_decoder(z_ref)
+            _stat("wav_roundtrip (decode z_ref directly)", wav_roundtrip)
+
+        return wav[:, :T_audio]
     
 
 
